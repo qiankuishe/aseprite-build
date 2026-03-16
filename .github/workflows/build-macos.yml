@@ -77,10 +77,10 @@ jobs:
 
           cmake "${cmake_args[@]}"
 
-      - name: Build Aseprite
+      - name: Build project
         shell: bash
         run: |
-          cmake --build build --target aseprite --parallel
+          cmake --build build --parallel
 
       - name: Run C++ tests
         shell: bash
