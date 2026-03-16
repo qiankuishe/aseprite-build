@@ -1,0 +1,107 @@
+name: build-macos
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Resolve macOS build settings
+        id: macos
+        shell: bash
+        run: |
+          arch="$(uname -m)"
+
+          if [[ "$arch" == "arm64" ]]; then
+            echo "cmake_arch=arm64" >> "$GITHUB_OUTPUT"
+            echo "skia_arch=arm64" >> "$GITHUB_OUTPUT"
+            echo "deployment_target=11.0" >> "$GITHUB_OUTPUT"
+            echo "png_arm_neon=on" >> "$GITHUB_OUTPUT"
+          else
+            echo "cmake_arch=x86_64" >> "$GITHUB_OUTPUT"
+            echo "skia_arch=x64" >> "$GITHUB_OUTPUT"
+            echo "deployment_target=10.14" >> "$GITHUB_OUTPUT"
+            echo "png_arm_neon=off" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Skia
+        shell: bash
+        run: |
+          skia_url=$(bash laf/misc/skia-url.sh release macos "${{ steps.macos.outputs.skia_arch }}")
+          skia_file=$(basename "$skia_url")
+          curl --fail --location --output "$skia_file" "$skia_url"
+          unzip -q "$skia_file" -d skia
+
+      - name: Restore compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2.17
+        with:
+          key: macos-${{ steps.macos.outputs.skia_arch }}-relwithdebinfo
+
+      - name: Install Ninja
+        uses: aseprite/get-ninja@main
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          cmake_args=(
+            -S .
+            -B build
+            -G Ninja
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo
+            -DCMAKE_OSX_ARCHITECTURES=${{ steps.macos.outputs.cmake_arch }}
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ steps.macos.outputs.deployment_target }}
+            -DCMAKE_OSX_SYSROOT=$(xcrun --sdk macosx --show-sdk-path)
+            -DENABLE_TESTS=ON
+            -DENABLE_SCRIPTING=ON
+            -DENABLE_CCACHE=ON
+            -DLAF_BACKEND=skia
+            -DSKIA_DIR=$PWD/skia
+            -DSKIA_LIBRARY_DIR=$PWD/skia/out/Release-${{ steps.macos.outputs.skia_arch }}
+            -DSKIA_LIBRARY=$PWD/skia/out/Release-${{ steps.macos.outputs.skia_arch }}/libskia.a
+          )
+
+          if [[ "${{ steps.macos.outputs.png_arm_neon }}" == "on" ]]; then
+            cmake_args+=(-DPNG_ARM_NEON:STRING=on)
+          fi
+
+          cmake "${cmake_args[@]}"
+
+      - name: Build Aseprite
+        shell: bash
+        run: |
+          cmake --build build --target aseprite --parallel
+
+      - name: Run C++ tests
+        shell: bash
+        run: |
+          ctest --test-dir build --output-on-failure
+
+      - name: Run CLI tests
+        shell: bash
+        run: |
+          export ASEPRITE="$PWD/build/bin/aseprite"
+          cd tests
+          bash run-tests.sh
+
+      - name: Package app bundle
+        shell: bash
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent build/bin/Aseprite.app aseprite-macos-app.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aseprite-macos-app
+          path: aseprite-macos-app.zip
+          retention-days: 14
