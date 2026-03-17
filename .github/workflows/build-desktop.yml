@@ -1,0 +1,251 @@
+name: build-desktop
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            artifact_name: aseprite-macos-app
+            package_file: aseprite-macos-app.zip
+            skia_os: macos
+            skia_arch: arm64
+            cmake_arch: arm64
+            deployment_target: 11.0
+            enable_ccache: true
+          - name: Windows
+            os: windows-latest
+            artifact_name: aseprite-windows
+            package_file: aseprite-windows.zip
+            skia_os: windows
+            skia_arch: x64
+            enable_ccache: false
+          - name: Linux
+            os: ubuntu-latest
+            artifact_name: aseprite-linux
+            package_file: aseprite-linux.tar.gz
+            skia_os: linux
+            skia_arch: x64
+            enable_ccache: true
+    env:
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: "true"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            ccache \
+            libpixman-1-dev libfreetype6-dev libharfbuzz-dev zlib1g-dev \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev \
+            libfontconfig1-dev xvfb
+
+      - name: Install macOS ccache
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew list ccache >/dev/null 2>&1 || brew install ccache
+
+      - name: Install Skia
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            this_dir=$(cygpath "${{ github.workspace }}")
+          else
+            this_dir="${{ github.workspace }}"
+          fi
+
+          skia_url=$(bash "$this_dir/laf/misc/skia-url.sh" release "${{ matrix.skia_os }}" "${{ matrix.skia_arch }}")
+          skia_file=$(basename "$skia_url")
+          curl --fail --location --output "$skia_file" "$skia_url"
+          unzip -q "$skia_file" -d skia
+
+      - name: Restore compiler cache
+        if: ${{ matrix.enable_ccache }}
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ matrix.skia_arch }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ matrix.skia_arch }}-
+
+      - name: Install Ninja
+        uses: aseprite/get-ninja@main
+
+      - name: Setup MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          cmake_args=(
+            -S .
+            -B build
+            -G Ninja
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo
+            -DENABLE_TESTS=ON
+            -DENABLE_SCRIPTING=ON
+          )
+
+          if [[ "${{ matrix.enable_ccache }}" == "true" ]]; then
+            cmake_args+=(-DENABLE_CCACHE=ON)
+          else
+            cmake_args+=(-DENABLE_CCACHE=OFF)
+          fi
+
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            cmake_args+=(
+              -DCMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }}
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }}
+              -DCMAKE_OSX_SYSROOT=$(xcrun --sdk macosx --show-sdk-path)
+              -DPNG_ARM_NEON:STRING=on
+            )
+          fi
+
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            skia_dir=$(cygpath -m "$PWD/skia")
+            skia_lib_dir=$(cygpath -m "$PWD/skia/out/Release-${{ matrix.skia_arch }}")
+            cmake_args+=(
+              -DLAF_BACKEND=skia
+              -DSKIA_DIR="$skia_dir"
+              -DSKIA_LIBRARY_DIR="$skia_lib_dir"
+              -DSKIA_LIBRARY="$skia_lib_dir/skia.lib"
+            )
+          else
+            cmake_args+=(
+              -DLAF_BACKEND=skia
+              -DSKIA_DIR="$PWD/skia"
+              -DSKIA_LIBRARY_DIR="$PWD/skia/out/Release-${{ matrix.skia_arch }}"
+            )
+          fi
+
+          cmake "${cmake_args[@]}"
+
+      - name: Build project
+        shell: bash
+        run: |
+          cmake --build build --parallel
+
+      - name: Show ccache stats
+        if: ${{ matrix.enable_ccache }}
+        shell: bash
+        run: |
+          ccache --show-stats || true
+
+      - name: Run C++ tests
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            export XVFB=xvfb-run
+          fi
+
+          cd build
+          $XVFB ctest --output-on-failure
+
+      - name: Run CLI tests
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            export XVFB=xvfb-run
+            export ASEPRITE="$PWD/build/bin/aseprite"
+          elif [[ "${{ runner.os }}" == "Windows" ]]; then
+            export ASEPRITE="$PWD/build/bin/aseprite.exe"
+          else
+            export ASEPRITE="$PWD/build/bin/aseprite"
+          fi
+
+          cd tests
+          $XVFB bash run-tests.sh
+
+      - name: Generate macOS bundle icons
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          make_icns() {
+            local prefix="$1"
+            local source_512="$2"
+            local source_256="$3"
+            local output="$4"
+            local iconset
+
+            iconset="$(mktemp -d)/${prefix}.iconset"
+            mkdir -p "$iconset"
+
+            sips -z 16 16 "$source_256" --out "$iconset/icon_16x16.png" >/dev/null
+            sips -z 32 32 "$source_256" --out "$iconset/icon_16x16@2x.png" >/dev/null
+            sips -z 32 32 "$source_256" --out "$iconset/icon_32x32.png" >/dev/null
+            sips -z 64 64 "$source_256" --out "$iconset/icon_32x32@2x.png" >/dev/null
+            sips -z 128 128 "$source_256" --out "$iconset/icon_128x128.png" >/dev/null
+            sips -z 256 256 "$source_256" --out "$iconset/icon_128x128@2x.png" >/dev/null
+            sips -z 256 256 "$source_256" --out "$iconset/icon_256x256.png" >/dev/null
+            sips -z 512 512 "$source_512" --out "$iconset/icon_256x256@2x.png" >/dev/null
+            sips -z 512 512 "$source_512" --out "$iconset/icon_512x512.png" >/dev/null
+            sips -z 1024 1024 "$source_512" --out "$iconset/icon_512x512@2x.png" >/dev/null
+
+            iconutil -c icns "$iconset" -o "$output"
+          }
+
+          resources_dir="build/bin/Aseprite.app/Contents/Resources"
+          mkdir -p "$resources_dir"
+
+          make_icns "aseprite" "data/icons/hd/asehd.png" "data/icons/ase256.png" "$resources_dir/Aseprite.icns"
+          make_icns "document" "data/icons/doc256.png" "data/icons/doc256.png" "$resources_dir/Document.icns"
+          make_icns "extension" "data/icons/ext256.png" "data/icons/ext256.png" "$resources_dir/Extension.icns"
+
+      - name: Sign macOS app bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          codesign --force --deep --sign - --timestamp=none build/bin/Aseprite.app
+
+      - name: Verify macOS app signature
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          codesign --verify --deep --strict --verbose=2 build/bin/Aseprite.app
+
+      - name: Package macOS build
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent build/bin/Aseprite.app "${{ matrix.package_file }}"
+
+      - name: Package Linux build
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          tar -czf "${{ matrix.package_file }}" -C build bin
+
+      - name: Package Windows build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build/bin -DestinationPath ${{ matrix.package_file }} -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.package_file }}
+          retention-days: 14
