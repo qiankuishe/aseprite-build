@@ -319,6 +319,23 @@ jobs:
           $cmakeScript = $cmakeScript.Replace('__ROOT__', $root).Replace('__PATH_DIRECTORIES__', $pathDirectives)
           Set-Content -Path package-runtime-deps.cmake -Value $cmakeScript
           cmake -P package-runtime-deps.cmake
+          $fallbackDlls = @('libssl-3-x64.dll', 'libcrypto-3-x64.dll')
+          foreach ($dll in $fallbackDlls) {
+            if (-not (Test-Path (Join-Path 'package/bin' $dll))) {
+              $found = $null
+              foreach ($dir in ($env:PATH -split ';')) {
+                if (-not $dir -or -not (Test-Path $dir)) { continue }
+                $candidate = Join-Path $dir $dll
+                if (Test-Path $candidate) {
+                  $found = $candidate
+                  break
+                }
+              }
+              if ($found) {
+                Copy-Item $found package/bin/
+              }
+            }
+          }
           Compress-Archive -Path package/bin -DestinationPath ${{ matrix.package_file }} -Force
 
       - name: Upload build artifact
