@@ -42,6 +42,7 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPRESS: "true"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
     steps:
       - name: Checkout source
@@ -92,11 +93,8 @@ jobs:
       - name: Install Ninja
         uses: aseprite/get-ninja@main
 
-      - name: Setup MSVC
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Configure CMake
+      - name: Configure CMake (macOS/Linux)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           cmake_args=(
@@ -142,9 +140,34 @@ jobs:
 
           cmake "${cmake_args[@]}"
 
-      - name: Build project
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS_PATH=%%i"
+          call "%VS_PATH%\Common7\Tools\VsDevCmd.bat" -arch=x64
+          cmake -S . -B build -G Ninja ^
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+            -DENABLE_TESTS=ON ^
+            -DENABLE_SCRIPTING=ON ^
+            -DENABLE_CCACHE=OFF ^
+            -DLAF_BACKEND=skia ^
+            -DSKIA_DIR="%CD%\skia" ^
+            -DSKIA_LIBRARY_DIR="%CD%\skia\out\Release-${{ matrix.skia_arch }}" ^
+            -DSKIA_LIBRARY="%CD%\skia\out\Release-${{ matrix.skia_arch }}\skia.lib"
+
+      - name: Build project (macOS/Linux)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
+          cmake --build build --parallel
+
+      - name: Build project (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS_PATH=%%i"
+          call "%VS_PATH%\Common7\Tools\VsDevCmd.bat" -arch=x64
           cmake --build build --parallel
 
       - name: Show ccache stats
@@ -153,7 +176,8 @@ jobs:
         run: |
           ccache --show-stats || true
 
-      - name: Run C++ tests
+      - name: Run C++ tests (macOS/Linux)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           if [[ "${{ runner.os }}" == "Linux" ]]; then
@@ -163,20 +187,36 @@ jobs:
           cd build
           $XVFB ctest --output-on-failure
 
-      - name: Run CLI tests
+      - name: Run C++ tests (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VS_PATH=%%i"
+          call "%VS_PATH%\Common7\Tools\VsDevCmd.bat" -arch=x64
+          cd build
+          ctest --output-on-failure
+
+      - name: Run CLI tests (macOS/Linux)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           if [[ "${{ runner.os }}" == "Linux" ]]; then
             export XVFB=xvfb-run
             export ASEPRITE="$PWD/build/bin/aseprite"
-          elif [[ "${{ runner.os }}" == "Windows" ]]; then
-            export ASEPRITE="$PWD/build/bin/aseprite.exe"
           else
             export ASEPRITE="$PWD/build/bin/aseprite"
           fi
 
           cd tests
           $XVFB bash run-tests.sh
+
+      - name: Run CLI tests (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          export ASEPRITE="$PWD/build/bin/aseprite.exe"
+          cd tests
+          bash run-tests.sh
 
       - name: Generate macOS bundle icons
         if: runner.os == 'macOS'
@@ -235,13 +275,23 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          tar -czf "${{ matrix.package_file }}" -C build bin
+          rm -rf package
+          mkdir -p package/bin
+          cp build/bin/aseprite package/bin/
+          cp -R build/bin/data package/bin/
+          find build/bin -maxdepth 1 -type f \( -name '*.so' -o -name '*.so.*' \) -exec cp {} package/bin/ \;
+          tar -czf "${{ matrix.package_file }}" -C package bin
 
       - name: Package Windows build
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path build/bin -DestinationPath ${{ matrix.package_file }} -Force
+          Remove-Item -Recurse -Force package -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path package/bin | Out-Null
+          Copy-Item build/bin/aseprite.exe package/bin/
+          Copy-Item build/bin/data package/bin/ -Recurse
+          Get-ChildItem build/bin -Filter *.dll -ErrorAction SilentlyContinue | Copy-Item -Destination package/bin/
+          Compress-Archive -Path package/bin -DestinationPath ${{ matrix.package_file }} -Force
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v6
