@@ -305,15 +305,15 @@ jobs:
               __PATH_DIRECTORIES__)
 
           foreach(dep IN LISTS resolved_deps)
-            get_filename_component(dep_name "`${dep}" NAME)
+            get_filename_component(dep_name "${dep}" NAME)
             if(NOT dep_name MATCHES "^api-ms-" AND
                NOT dep_name MATCHES "^ext-ms-")
-              file(COPY "`${dep}" DESTINATION "__ROOT__/package/bin")
+              file(COPY "${dep}" DESTINATION "__ROOT__/package/bin")
             endif()
           endforeach()
 
           if(unresolved_deps)
-            message(WARNING "Unresolved runtime dependencies: `${unresolved_deps}")
+            message(WARNING "Unresolved runtime dependencies: ${unresolved_deps}")
           endif()
           '@
           $cmakeScript = $cmakeScript.Replace('__ROOT__', $root).Replace('__PATH_DIRECTORIES__', $pathDirectives)
