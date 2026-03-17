@@ -66,6 +66,12 @@ Preferences::Preferences() : app::gen::GlobalPref("")
 
   load();
 
+  if (firstTime) {
+    // Preselect the bundled Chinese localization/theme on the very first run.
+    general.language("sChinese");
+    theme.selected("aseprite-theme-pixel");
+  }
+
   // Create a connection with the default document preferences grid
   // bounds to sync the default grid bounds for new sprites in the
   // "doc" layer.
