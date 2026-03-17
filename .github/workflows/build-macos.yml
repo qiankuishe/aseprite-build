@@ -10,10 +10,14 @@ on:
 jobs:
   build-macos:
     runs-on: macos-latest
+    env:
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: "true"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -44,9 +48,17 @@ jobs:
           unzip -q "$skia_file" -d skia
 
       - name: Restore compiler cache
-        uses: hendrikmuhs/ccache-action@v1.2.17
+        uses: actions/cache@v5
         with:
-          key: macos-${{ steps.macos.outputs.skia_arch }}-relwithdebinfo
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-macos-${{ steps.macos.outputs.skia_arch }}-${{ github.sha }}
+          restore-keys: |
+            ccache-macos-${{ steps.macos.outputs.skia_arch }}-
+
+      - name: Install ccache
+        shell: bash
+        run: |
+          brew list ccache >/dev/null 2>&1 || brew install ccache
 
       - name: Install Ninja
         uses: aseprite/get-ninja@main
@@ -82,6 +94,11 @@ jobs:
         run: |
           cmake --build build --parallel
 
+      - name: Show ccache stats
+        shell: bash
+        run: |
+          ccache --show-stats || true
+
       - name: Run C++ tests
         shell: bash
         run: |
@@ -100,7 +117,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent build/bin/Aseprite.app aseprite-macos-app.zip
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: aseprite-macos-app
           path: aseprite-macos-app.zip
