@@ -111,6 +111,40 @@ jobs:
           cd tests
           bash run-tests.sh
 
+      - name: Generate bundle icons
+        shell: bash
+        run: |
+          make_icns() {
+            local prefix="$1"
+            local source_512="$2"
+            local source_256="$3"
+            local output="$4"
+            local iconset
+
+            iconset="$(mktemp -d)/${prefix}.iconset"
+            mkdir -p "$iconset"
+
+            sips -z 16 16 "$source_256" --out "$iconset/icon_16x16.png" >/dev/null
+            sips -z 32 32 "$source_256" --out "$iconset/icon_16x16@2x.png" >/dev/null
+            sips -z 32 32 "$source_256" --out "$iconset/icon_32x32.png" >/dev/null
+            sips -z 64 64 "$source_256" --out "$iconset/icon_32x32@2x.png" >/dev/null
+            sips -z 128 128 "$source_256" --out "$iconset/icon_128x128.png" >/dev/null
+            sips -z 256 256 "$source_256" --out "$iconset/icon_128x128@2x.png" >/dev/null
+            sips -z 256 256 "$source_256" --out "$iconset/icon_256x256.png" >/dev/null
+            sips -z 512 512 "$source_512" --out "$iconset/icon_256x256@2x.png" >/dev/null
+            sips -z 512 512 "$source_512" --out "$iconset/icon_512x512.png" >/dev/null
+            sips -z 1024 1024 "$source_512" --out "$iconset/icon_512x512@2x.png" >/dev/null
+
+            iconutil -c icns "$iconset" -o "$output"
+          }
+
+          resources_dir="build/bin/Aseprite.app/Contents/Resources"
+          mkdir -p "$resources_dir"
+
+          make_icns "aseprite" "data/icons/hd/asehd.png" "data/icons/ase256.png" "$resources_dir/Aseprite.icns"
+          make_icns "document" "data/icons/doc256.png" "data/icons/doc256.png" "$resources_dir/Document.icns"
+          make_icns "extension" "data/icons/ext256.png" "data/icons/ext256.png" "$resources_dir/Extension.icns"
+
       - name: Sign app bundle
         shell: bash
         run: |
