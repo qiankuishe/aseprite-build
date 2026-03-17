@@ -291,28 +291,32 @@ jobs:
           Copy-Item build/bin/aseprite.exe package/bin/
           Copy-Item build/bin/data package/bin/ -Recurse
           $root = ((Get-Location).Path -replace '\\', '/')
-          $cmakeScript = @"
+          $pathDirs = ($env:PATH -split ';' | Where-Object { $_ -and (Test-Path $_) } | ForEach-Object { ($_ -replace '\\', '/') })
+          $pathDirectives = ($pathDirs | ForEach-Object { "              `"`$_`"" }) -join "`n"
+          $cmakeScript = @'
           file(GET_RUNTIME_DEPENDENCIES
             EXECUTABLES
-              "$root/build/bin/aseprite.exe"
+              "__ROOT__/build/bin/aseprite.exe"
             RESOLVED_DEPENDENCIES_VAR resolved_deps
             UNRESOLVED_DEPENDENCIES_VAR unresolved_deps
             DIRECTORIES
-              "$root/build/bin"
-              "$root/build/lib")
+              "__ROOT__/build/bin"
+              "__ROOT__/build/lib"
+              __PATH_DIRECTORIES__)
 
           foreach(dep IN LISTS resolved_deps)
             get_filename_component(dep_name "`${dep}" NAME)
             if(NOT dep_name MATCHES "^api-ms-" AND
                NOT dep_name MATCHES "^ext-ms-")
-              file(COPY "`${dep}" DESTINATION "$root/package/bin")
+              file(COPY "`${dep}" DESTINATION "__ROOT__/package/bin")
             endif()
           endforeach()
 
           if(unresolved_deps)
             message(WARNING "Unresolved runtime dependencies: `${unresolved_deps}")
           endif()
-          "@
+          '@
+          $cmakeScript = $cmakeScript.Replace('__ROOT__', $root).Replace('__PATH_DIRECTORIES__', $pathDirectives)
           Set-Content -Path package-runtime-deps.cmake -Value $cmakeScript
           cmake -P package-runtime-deps.cmake
           Compress-Archive -Path package/bin -DestinationPath ${{ matrix.package_file }} -Force
