@@ -111,6 +111,16 @@ jobs:
           cd tests
           bash run-tests.sh
 
+      - name: Sign app bundle
+        shell: bash
+        run: |
+          codesign --force --deep --sign - --timestamp=none build/bin/Aseprite.app
+
+      - name: Verify app signature
+        shell: bash
+        run: |
+          codesign --verify --deep --strict --verbose=2 build/bin/Aseprite.app
+
       - name: Package app bundle
         shell: bash
         run: |
