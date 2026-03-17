@@ -1,0 +1,20 @@
+{
+  "name": "aseprite-theme-pixel",
+  "displayName": "像素中文主题",
+  "description": "Pixel-art theme bundled with the Simplified Chinese font set",
+  "version": "1.2.12",
+  "author": { "name": "David Capello", "email": "davidcapello@gmail.com", "url": "http://davidcapello.com/" },
+  "contributors": [
+    { "name": "Ilija Melentijevic", "url": "http://ilkke.blogspot.com/" }
+  ],
+  "publisher": "aseprite",
+  "license": "CC-BY-4.0",
+  "categories": [
+    "Themes"
+  ],
+  "contributes": {
+    "themes": [
+      { "id": "aseprite-theme-pixel", "path": ".", "variant": "Pixel Chinese" }
+    ]
+  }
+}
