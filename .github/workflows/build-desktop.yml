@@ -290,7 +290,31 @@ jobs:
           New-Item -ItemType Directory -Path package/bin | Out-Null
           Copy-Item build/bin/aseprite.exe package/bin/
           Copy-Item build/bin/data package/bin/ -Recurse
-          Get-ChildItem build/bin -Filter *.dll -ErrorAction SilentlyContinue | Copy-Item -Destination package/bin/
+          $root = ((Get-Location).Path -replace '\\', '/')
+          $cmakeScript = @"
+          file(GET_RUNTIME_DEPENDENCIES
+            EXECUTABLES
+              "$root/build/bin/aseprite.exe"
+            RESOLVED_DEPENDENCIES_VAR resolved_deps
+            UNRESOLVED_DEPENDENCIES_VAR unresolved_deps
+            DIRECTORIES
+              "$root/build/bin"
+              "$root/build/lib")
+
+          foreach(dep IN LISTS resolved_deps)
+            get_filename_component(dep_name "`${dep}" NAME)
+            if(NOT dep_name MATCHES "^api-ms-" AND
+               NOT dep_name MATCHES "^ext-ms-")
+              file(COPY "`${dep}" DESTINATION "$root/package/bin")
+            endif()
+          endforeach()
+
+          if(unresolved_deps)
+            message(WARNING "Unresolved runtime dependencies: `${unresolved_deps}")
+          endif()
+          "@
+          Set-Content -Path package-runtime-deps.cmake -Value $cmakeScript
+          cmake -P package-runtime-deps.cmake
           Compress-Archive -Path package/bin -DestinationPath ${{ matrix.package_file }} -Force
 
       - name: Upload build artifact
